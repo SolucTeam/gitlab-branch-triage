@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+-  initial commit and push beta version v1.0.0 (bfba928)
+
+### Other
+
+- Initial commit (123cd8b)
+
+## [1.0.0] - 2026-03-11
+
+### Added
+
 - YAML-driven policy engine for branch and merge request triage
 - Branch conditions: `inactive_days`, `merged`, `protected`, `has_open_mr`, `name`, `forbidden_name`, `author`, `forbidden_author`, `date`
 - Branch actions: `notify`, `delete`, `print`, `comment`
@@ -22,5 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Template variable system for notification messages
 - Rate-limit handling with configurable max retries
 - CLI with comprehensive options for token, source, host, policies, and filters
+
+[1.0.0]: https://github.com/solucteam/gitlab-branch-triage/releases/tag/v1.0.0
 
 [1.0.0]: https://github.com/solucteam/gitlab-branch-triage/releases/tag/v1.0.0

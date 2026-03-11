@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 160" fill="none">
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FC6D26;stop-opacity:1"/>
+      <stop offset="50%" style="stop-color:#E24329;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#6B4FBB;stop-opacity:1"/>
+    </linearGradient>
+    <linearGradient id="grad2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#FC6D26;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#FCA326;stop-opacity:1"/>
+    </linearGradient>
+    <linearGradient id="grad3" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#6B4FBB;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#9B51E0;stop-opacity:1"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+
+  <!-- Background pill -->
+  <rect x="0" y="0" width="600" height="160" rx="20" fill="#0D1117"/>
+
+  <!-- Decorative grid dots -->
+  <g opacity="0.08" fill="#fff">
+    <circle cx="30" cy="30" r="1.5"/>
+    <circle cx="50" cy="30" r="1.5"/>
+    <circle cx="70" cy="30" r="1.5"/>
+    <circle cx="30" cy="50" r="1.5"/>
+    <circle cx="50" cy="50" r="1.5"/>
+    <circle cx="70" cy="50" r="1.5"/>
+    <circle cx="530" cy="110" r="1.5"/>
+    <circle cx="550" cy="110" r="1.5"/>
+    <circle cx="570" cy="110" r="1.5"/>
+    <circle cx="530" cy="130" r="1.5"/>
+    <circle cx="550" cy="130" r="1.5"/>
+    <circle cx="570" cy="130" r="1.5"/>
+  </g>
+
+  <!-- Branch icon group -->
+  <g transform="translate(35, 30)" filter="url(#shadow)">
+    <!-- Main branch line (vertical) -->
+    <line x1="40" y1="15" x2="40" y2="85" stroke="url(#grad2)" stroke-width="4" stroke-linecap="round"/>
+
+    <!-- Feature branch curve -->
+    <path d="M 40 35 C 40 35, 55 35, 70 50" stroke="url(#grad3)" stroke-width="4" fill="none" stroke-linecap="round"/>
+
+    <!-- Merge back curve -->
+    <path d="M 70 50 C 70 65, 55 70, 40 70" stroke="url(#grad3)" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-dasharray="4 3" opacity="0.6"/>
+
+    <!-- Branch nodes -->
+    <circle cx="40" cy="15" r="7" fill="#FC6D26" filter="url(#glow)"/>
+    <circle cx="40" cy="15" r="3.5" fill="#0D1117"/>
+
+    <circle cx="40" cy="85" r="7" fill="#FC6D26" filter="url(#glow)"/>
+    <circle cx="40" cy="85" r="3.5" fill="#0D1117"/>
+
+    <circle cx="70" cy="50" r="7" fill="#6B4FBB" filter="url(#glow)"/>
+    <circle cx="70" cy="50" r="3.5" fill="#0D1117"/>
+
+    <!-- Triage indicator (scissors / cut) -->
+    <g transform="translate(78, 42)" opacity="0.9">
+      <line x1="0" y1="0" x2="12" y2="12" stroke="#E24329" stroke-width="2.5" stroke-linecap="round"/>
+      <line x1="12" y1="0" x2="0" y2="12" stroke="#E24329" stroke-width="2.5" stroke-linecap="round"/>
+    </g>
+  </g>
+
+  <!-- Title text -->
+  <text x="170" y="72" font-family="'SF Pro Display', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="34" font-weight="700" fill="#ECEDEE" letter-spacing="-0.5">
+    gitlab-branch-triage
+  </text>
+
+  <!-- Subtitle -->
+  <text x="170" y="102" font-family="'SF Pro Text', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" fill="#8B949E" letter-spacing="0.3">
+    Policy-driven branch &amp; MR cleanup for GitLab
+  </text>
+
+  <!-- Accent line under title -->
+  <rect x="170" y="78" width="80" height="2.5" rx="1.25" fill="url(#grad1)" opacity="0.8"/>
+</svg>

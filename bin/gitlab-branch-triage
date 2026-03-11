@@ -1,0 +1,488 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+$LOAD_PATH.unshift(File.join(__dir__, "..", "lib"))
+require "gitlab-branch-triage"
+
+EXAMPLE_POLICY = <<~YAML
+  # .branch-triage-policies.yml
+  # Run against a single project:
+  #   gitlab-branch-triage --token $TOKEN --source-id my-group/my-project
+  #
+  # Run against an entire group (all subgroups included recursively):
+  #   gitlab-branch-triage --token $TOKEN --source groups --source-id my-group
+  #   gitlab-branch-triage --token $TOKEN --source groups --source-id my-group/subgroup
+  #
+  # Dry-run by default. Pass --no-dry-run to execute real actions.
+  #
+  # ── Conditions ──────────────────────────────────────────────────────
+  #   inactive_days: 60
+  #   date:
+  #     attribute: committed_date
+  #     condition: older_than | more_recent_than
+  #     interval_type: days | weeks | months | years
+  #     interval: 60
+  #   name:
+  #     matches: "^feature/.*"
+  #     contains: "hotfix"
+  #     starts_with: "release/"
+  #     ends_with: "-wip"
+  #   forbidden_name:
+  #     matches: "^(main|master|develop)$"
+  #   merged: true | false
+  #   protected: true | false
+  #   has_open_mr: true | false
+  #   author:
+  #     email_domain: "company.com"
+  #     name_matches: "^Alice.*"
+  #   forbidden_author:
+  #     email_domain: "bot.com"
+  #
+  # ── Actions ─────────────────────────────────────────────────────────
+  #   notify:
+  #     title: "Stale branch: {{name}} in {{project_path}}"
+  #     body: |
+  #       @{{author_username}}, branch `{{name}}` in project `{{project_path}}`
+  #       has been inactive for {{days_inactive}} days.
+  #       Scheduled deletion: {{delete_date}}
+  #     labels:
+  #       - branch-cleanup
+  #   delete: true
+  #   print: "Branch {{name}} ({{project_path}}) — {{days_inactive}} days inactive."
+  #
+  # ── Template variables ───────────────────────────────────────────────
+  #   {{name}}             Branch name
+  #   {{project_path}}     Project path (e.g. my-group/my-project)
+  #   {{author_name}}      Git commit author name
+  #   {{author_email}}     Git commit author email
+  #   {{author_username}}  GitLab username (resolved from email)
+  #   {{committed_date}}   Last commit date (YYYY-MM-DD)
+  #   {{days_inactive}}    Days since last commit
+  #   {{delete_date}}      Scheduled deletion date
+  #   {{today}}            Today's date
+
+  resource_rules:
+    branches:
+      rules:
+        - name: Notify stale branches (60+ days)
+          conditions:
+            inactive_days: 60
+            merged: false
+            protected: false
+            has_open_mr: false
+            forbidden_name:
+              matches: "^(main|master|develop|staging|production)$"
+          limits:
+            most_recent: 50
+          actions:
+            notify:
+              title: "Stale branch: `{{name}}` in {{project_path}}"
+              body: |
+                Hi @{{author_username}},
+
+                Branch `{{name}}` in project `{{project_path}}` has been inactive
+                for **{{days_inactive}} days** (last commit: `{{committed_date}}`).
+
+                It will be deleted on **{{delete_date}}** unless you act.
+
+                - Open a Merge Request if this work needs to be merged
+                - Delete the branch if it is no longer needed
+
+                _Automated by gitlab-branch-triage._
+              labels:
+                - branch-cleanup
+                - automated
+
+        - name: Delete abandoned branches (90+ days)
+          conditions:
+            inactive_days: 90
+            merged: false
+            protected: false
+            has_open_mr: false
+            forbidden_name:
+              matches: "^(main|master|develop|staging|production)$"
+          actions:
+            print: "Deleting {{name}} in {{project_path}} ({{days_inactive}}d, {{author_name}})"
+            delete: true
+
+        - name: Delete stale merged branches (7+ days)
+          conditions:
+            date:
+              attribute: committed_date
+              condition: older_than
+              interval_type: days
+              interval: 7
+            merged: true
+            protected: false
+          actions:
+            print: "Deleting merged branch {{name}} in {{project_path}}"
+            delete: true
+
+  # ── MR rules ────────────────────────────────────────────────────────────
+  # Triage open merge requests (abandoned, draft, no reviewer, etc.)
+  #
+  # Available conditions:
+  #   date:
+  #     attribute: updated_at | created_at
+  #     condition: older_than | more_recent_than
+  #     interval_type: days | weeks | months | years
+  #     interval: 30
+  #   draft: true | false
+  #   assigned: true | false
+  #   has_reviewer: true | false
+  #   pipeline_status: "failed" | "success" | "running" | ""
+  #   labels:
+  #     - some-label
+  #   forbidden_labels:
+  #     - do-not-close
+  #   target_branch: main
+  #   title:
+  #     matches: ".*hotfix.*"
+  #
+  # Available actions:
+  #   comment_mr: "Message with {{author_username}} and !{{iid}}"
+  #   close_mr: true
+  #   label_mr:
+  #     - stale
+  #   notify_mr:
+  #     title: "Abandoned MR: !{{iid}} {{title}}"
+  #     body: |
+  #       @{{author_username}}, this MR has been inactive for {{days_since_update}} days.
+  #     labels:
+  #       - mr-cleanup
+  #   print: "MR !{{iid}} {{title}} ({{days_since_update}}d)"
+  #
+  # Template variables:
+  #   {{iid}}                MR number
+  #   {{title}}              MR title
+  #   {{web_url}}            MR URL
+  #   {{source_branch}}      Source branch
+  #   {{target_branch}}      Target branch
+  #   {{author_username}}    Author GitLab username
+  #   {{author_name}}        Author display name
+  #   {{labels}}             Comma-separated labels
+  #   {{state}}              opened | closed | merged
+  #   {{draft}}              true | false
+  #   {{days_since_update}}  Days since last update
+  #   {{days_since_creation}} Days since creation
+  #   {{updated_at}}         Last update date (YYYY-MM-DD)
+  #   {{pipeline_status}}    Pipeline status
+  #   {{project_path}}       Project path
+  #   {{close_date}}         Computed closing date
+  #   {{today}}              Today's date
+
+  merge_requests:
+    rules:
+      # ── 1. Warn about MRs with no activity for 30 days ──────────────────
+      - name: Warn abandoned MRs (30+ days without update)
+        conditions:
+          date:
+            attribute: updated_at
+            condition: older_than
+            interval_type: days
+            interval: 30
+          forbidden_labels:
+            - do-not-close
+            - on-hold
+        limits:
+          most_recent: 30
+        actions:
+          label_mr:
+            - stale
+          comment_mr: |
+            Hi @{{author_username}} 👋
+
+            This MR has had no activity for **{{days_since_update}} days**.
+
+            Please update it before **{{close_date}}** or it will be closed automatically.
+
+            If this is intentional, add the `on-hold` label to prevent auto-closing.
+
+            _Automated by gitlab-branch-triage._
+
+      # ── 2. Close MRs abandoned for 60+ days ─────────────────────────────
+      - name: Close abandoned MRs (60+ days without update)
+        conditions:
+          date:
+            attribute: updated_at
+            condition: older_than
+            interval_type: days
+            interval: 60
+          forbidden_labels:
+            - do-not-close
+            - on-hold
+        actions:
+          print: "Closing MR !{{iid}} {{title}} ({{days_since_update}}d without update)"
+          comment_mr: |
+            Closing this MR automatically after **{{days_since_update}} days** of inactivity.
+
+            If you want to continue this work, feel free to reopen it.
+
+            _Automated by gitlab-branch-triage._
+          close_mr: true
+
+      # ── 3. Notify about long-running drafts (30+ days) ──────────────────
+      - name: Notify long-running Draft/WIP MRs (30+ days)
+        conditions:
+          draft: true
+          date:
+            attribute: created_at
+            condition: older_than
+            interval_type: days
+            interval: 30
+          forbidden_labels:
+            - on-hold
+        actions:
+          label_mr:
+            - needs-attention
+          notify_mr:
+            title: "Long-running Draft MR: !{{iid}} in {{project_path}}"
+            body: |
+              Hi @{{author_username}} 👋
+
+              Draft MR [!{{iid}} {{title}}]({{web_url}}) in `{{project_path}}`
+              has been open for **{{days_since_creation}} days** and is still a Draft.
+
+              Consider:
+              - Marking it as ready for review if the work is complete
+              - Closing it if it is no longer needed
+
+              _Automated by gitlab-branch-triage._
+            labels:
+              - draft-cleanup
+              - automated
+
+      # ── 4. Flag MRs with failed pipeline and no activity ────────────────
+      - name: Flag MRs with failed pipeline (7+ days)
+        conditions:
+          pipeline_status: "failed"
+          date:
+            attribute: updated_at
+            condition: older_than
+            interval_type: days
+            interval: 7
+        actions:
+          label_mr:
+            - pipeline-failing
+          comment_mr: |
+            @{{author_username}}, the pipeline for this MR has been failing
+            for **{{days_since_update}} days** with no update.
+
+            Please check the pipeline and fix any issues.
+
+            _Automated by gitlab-branch-triage._
+
+      # ── 5. Notify MRs with no reviewer assigned ──────────────────────────
+      - name: Notify MRs with no reviewer (14+ days open)
+        conditions:
+          has_reviewer: false
+          draft: false
+          date:
+            attribute: created_at
+            condition: older_than
+            interval_type: days
+            interval: 14
+          forbidden_labels:
+            - on-hold
+        actions:
+          label_mr:
+            - needs-reviewer
+          print: "MR !{{iid}} open {{days_since_creation}}d with no reviewer: {{title}}"
+YAML
+
+EXAMPLE_CI = <<~YAML
+  # .gitlab-ci.yml
+  #
+  # Setup:
+  #   1. Add GITLAB_TOKEN (api scope) in Settings > CI/CD > Variables
+  #   2. Create a Schedule in Settings > CI/CD > Schedules:
+  #      Cron: 0 9 * * 1  (every Monday at 09:00)
+
+  branch-triage:
+    stage: triage
+    image: ruby:3.2-slim
+    before_script:
+      - gem install gitlab-branch-triage --no-document
+    script:
+      - |
+        # Single project:
+        gitlab-branch-triage \\
+          --token $GITLAB_TOKEN \\
+          --source-id $CI_PROJECT_PATH \\
+          --no-dry-run
+
+        # Or entire group (all subgroups included):
+        # gitlab-branch-triage \\
+        #   --token $GITLAB_TOKEN \\
+        #   --source groups \\
+        #   --source-id my-top-level-group \\
+        #   --no-dry-run
+    rules:
+      - if: $CI_PIPELINE_SOURCE == "schedule"
+      - if: $CI_PIPELINE_SOURCE == "web"
+        when: manual
+    allow_failure: true
+YAML
+
+# ── Option parsing ──────────────────────────────────────────────────────────
+
+options = {
+  token:            ENV["GITLAB_TOKEN"],
+  source:           "projects",
+  source_id:        ENV["CI_PROJECT_PATH"],
+  host_url:         ENV.fetch("GITLAB_HOST", "https://gitlab.com"),
+  policies_file:    ".branch-triage-policies.yml",
+  dry_run:          true,
+  debug:            false,
+  exclude_archived: true,
+  exclude_forks:    true,
+}
+
+parser = OptionParser.new do |opts|
+  opts.banner = "Usage: gitlab-branch-triage [options]"
+  opts.separator ""
+  opts.separator "Connection:"
+
+  opts.on("-t", "--token TOKEN",
+          "GitLab API token (or GITLAB_TOKEN env var)") { |v| options[:token] = v }
+
+  opts.on("-H", "--host-url URL",
+          "GitLab host URL (default: https://gitlab.com)") { |v| options[:host_url] = v }
+
+  opts.separator ""
+  opts.separator "Source (what to triage):"
+
+  opts.on("-s", "--source TYPE",
+          "Source type: 'projects' (default) or 'groups'") do |v|
+    unless %w[projects groups].include?(v)
+      abort("❌ --source must be 'projects' or 'groups'")
+    end
+    options[:source] = v
+  end
+
+  opts.on("-i", "--source-id ID",
+          "Project or group path/ID",
+          "  projects: my-group/my-project",
+          "  groups:   my-group  or  my-group/sub-group") { |v| options[:source_id] = v }
+
+  opts.separator ""
+  opts.separator "Group filters (only with --source groups):"
+
+  opts.on("--[no-]exclude-archived",
+          "Exclude archived projects (default: true)") { |v| options[:exclude_archived] = v }
+
+  opts.on("--[no-]exclude-forks",
+          "Exclude forked projects (default: true)") { |v| options[:exclude_forks] = v }
+
+  opts.separator ""
+  opts.separator "Policies:"
+
+  opts.on("-f", "--policies-file FILE",
+          "YAML policies file (default: .branch-triage-policies.yml)") { |v| options[:policies_file] = v }
+
+  opts.separator ""
+  opts.separator "Behaviour:"
+
+  opts.on("-n", "--dry-run",
+          "Don't perform any real actions (default: on)") { options[:dry_run] = true }
+
+  opts.on("--no-dry-run",
+          "Execute real actions") { options[:dry_run] = false }
+
+  opts.on("-d", "--debug",
+          "Print extra debug information") { options[:debug] = true }
+
+  opts.separator ""
+  opts.separator "Helpers:"
+
+  opts.on("--init", "Create an example .branch-triage-policies.yml") do
+    path = ".branch-triage-policies.yml"
+    if File.exist?(path)
+      warn "⚠️  #{path} already exists. Remove it first."
+      exit 1
+    end
+    File.write(path, EXAMPLE_POLICY)
+    puts "✅ Created #{path}"
+    puts "   Edit it, then run:"
+    puts "     gitlab-branch-triage --token $TOKEN --source-id <project>"
+    puts "     gitlab-branch-triage --token $TOKEN --source groups --source-id <group>"
+    exit
+  end
+
+  opts.on("--init-ci", "Print an example .gitlab-ci.yml snippet") do
+    puts EXAMPLE_CI
+    exit
+  end
+
+  opts.on("-v", "--version", "Print version") do
+    puts "gitlab-branch-triage #{Gitlab::BranchTriage::VERSION}"
+    exit
+  end
+
+  opts.on("-h", "--help", "Print this help") do
+    puts opts
+    exit
+  end
+
+  opts.separator ""
+  opts.separator "Examples:"
+  opts.separator "  # Triage a single project (dry-run by default)"
+  opts.separator "  gitlab-branch-triage --token $TOKEN --source-id my-group/my-project"
+  opts.separator ""
+  opts.separator "  # Triage all projects in a group (subgroups included recursively)"
+  opts.separator "  gitlab-branch-triage --token $TOKEN --source groups --source-id my-group"
+  opts.separator ""
+  opts.separator "  # Triage a nested subgroup"
+  opts.separator "  gitlab-branch-triage --token $TOKEN --source groups --source-id my-group/backend"
+  opts.separator ""
+  opts.separator "  # Live run"
+  opts.separator "  gitlab-branch-triage --token $TOKEN --source groups --source-id my-group --no-dry-run"
+  opts.separator ""
+  opts.separator "  # Keep forks (exclude archived only)"
+  opts.separator "  gitlab-branch-triage --token $TOKEN --source groups --source-id my-group --no-exclude-forks"
+end
+
+parser.parse!(ARGV)
+
+# ── Validation ───────────────────────────────────────────────────────────────
+
+abort("❌ --token is required (or set GITLAB_TOKEN)") unless options[:token]
+abort("❌ --source-id is required")                   unless options[:source_id]
+abort("❌ Policies file not found: #{options[:policies_file]}\n   Run --init to create one.") \
+  unless File.exist?(options[:policies_file])
+
+# ── Logger ────────────────────────────────────────────────────────────────────
+
+logger           = Logger.new($stdout)
+logger.level     = options[:debug] ? Logger::DEBUG : Logger::INFO
+logger.formatter = proc { |_, _, _, msg| "#{msg}\n" }
+
+# ── Run ───────────────────────────────────────────────────────────────────────
+
+begin
+  policy_loader = Gitlab::BranchTriage::PolicyLoader.load(options[:policies_file])
+  client        = Gitlab::BranchTriage::Client.new(
+    host_url: options[:host_url],
+    token:    options[:token],
+    logger:   logger
+  )
+  runner = Gitlab::BranchTriage::Runner.new(
+    client:        client,
+    policy_loader: policy_loader,
+    source:        options[:source],
+    source_id:     options[:source_id],
+    dry_run:       options[:dry_run],
+    logger:        logger,
+    options:       {
+      exclude_archived: options[:exclude_archived],
+      exclude_forks:    options[:exclude_forks],
+    }
+  )
+  runner.run
+rescue Gitlab::BranchTriage::PolicyLoader::InvalidPolicyError => e
+  abort("❌ Invalid policy file: #{e.message}")
+rescue Interrupt
+  abort("\n⛔ Interrupted.")
+rescue => e
+  abort("❌ Fatal error: #{e.message}#{options[:debug] ? "\n#{e.backtrace.first(5).join("\n")}" : ""}")
+end

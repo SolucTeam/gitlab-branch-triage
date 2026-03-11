@@ -1,0 +1,207 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "lib/gitlab/branch_triage/version.rb"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Changelog → Tag → RubyGems → GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── 1. Detect version change ─────────────────────────────────────
+
+      - name: Check if version changed
+        id: version
+        run: |
+          current=$(grep -oP 'VERSION\s*=\s*"\K[^"]+' lib/gitlab/branch_triage/version.rb)
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+
+          previous=$(git show HEAD~1:lib/gitlab/branch_triage/version.rb 2>/dev/null | grep -oP 'VERSION\s*=\s*"\K[^"]+' || echo "")
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+
+          if [ "$current" != "$previous" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Version changed: $previous → $current"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Version unchanged: $current"
+          fi
+
+      - name: Verify tag does not already exist
+        if: steps.version.outputs.changed == 'true'
+        id: check_tag
+        run: |
+          tag="v${{ steps.version.outputs.current }}"
+          if git ls-remote --tags origin "$tag" | grep -q "$tag"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Tag $tag already exists, skipping"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── 2. Generate CHANGELOG.md ─────────────────────────────────────
+
+      - name: Generate CHANGELOG.md
+        if: steps.version.outputs.changed == 'true' && steps.check_tag.outputs.exists == 'false'
+        run: |
+          version="${{ steps.version.outputs.current }}"
+          previous="${{ steps.version.outputs.previous }}"
+          date=$(date +%Y-%m-%d)
+
+          # Determine commit range
+          if [ -n "$previous" ] && git tag -l "v$previous" | grep -q "v$previous"; then
+            range="v${previous}..HEAD"
+          else
+            range="HEAD"
+          fi
+
+          # Collect commits by type (Conventional Commits)
+          feat=$(git log "$range" --pretty=format:"- %s (%h)" --grep="^feat" --no-merges 2>/dev/null | sed 's/^- feat[:(]/- /' | sed 's/^- /- /')
+          fix=$(git log "$range" --pretty=format:"- %s (%h)" --grep="^fix" --no-merges 2>/dev/null | sed 's/^- fix[:(]/- /' | sed 's/^- /- /')
+          docs=$(git log "$range" --pretty=format:"- %s (%h)" --grep="^docs" --no-merges 2>/dev/null | sed 's/^- docs[:(]/- /' | sed 's/^- /- /')
+          perf=$(git log "$range" --pretty=format:"- %s (%h)" --grep="^perf" --no-merges 2>/dev/null | sed 's/^- perf[:(]/- /' | sed 's/^- /- /')
+          refactor=$(git log "$range" --pretty=format:"- %s (%h)" --grep="^refactor" --no-merges 2>/dev/null | sed 's/^- refactor[:(]/- /' | sed 's/^- /- /')
+          breaking=$(git log "$range" --pretty=format:"- %s (%h)" --grep="BREAKING CHANGE" --no-merges 2>/dev/null)
+          chore=$(git log "$range" --pretty=format:"- %s (%h)" --grep="^chore" --no-merges 2>/dev/null | sed 's/^- chore[:(]/- /' | sed 's/^- /- /')
+
+          # Commits that don't match any conventional prefix
+          all_conventional=$(git log "$range" --pretty=format:"%h" --grep="^feat\|^fix\|^docs\|^perf\|^refactor\|^chore\|^style\|^test\|^build\|^ci" --no-merges 2>/dev/null)
+          all_commits=$(git log "$range" --pretty=format:"%h" --no-merges 2>/dev/null)
+          other=""
+          for hash in $all_commits; do
+            if ! echo "$all_conventional" | grep -q "$hash"; then
+              msg=$(git log -1 --pretty=format:"- %s (%h)" "$hash")
+              other="${other}${msg}\n"
+            fi
+          done
+
+          # Build the new version section
+          section="## [$version] - $date\n"
+
+          if [ -n "$breaking" ]; then
+            section="${section}\n### Breaking Changes\n\n${breaking}\n"
+          fi
+          if [ -n "$feat" ]; then
+            section="${section}\n### Added\n\n${feat}\n"
+          fi
+          if [ -n "$fix" ]; then
+            section="${section}\n### Fixed\n\n${fix}\n"
+          fi
+          if [ -n "$perf" ]; then
+            section="${section}\n### Performance\n\n${perf}\n"
+          fi
+          if [ -n "$refactor" ]; then
+            section="${section}\n### Changed\n\n${refactor}\n"
+          fi
+          if [ -n "$docs" ]; then
+            section="${section}\n### Documentation\n\n${docs}\n"
+          fi
+          if [ -n "$chore" ]; then
+            section="${section}\n### Maintenance\n\n${chore}\n"
+          fi
+          if [ -n "$other" ]; then
+            section="${section}\n### Other\n\n$(echo -e "$other")\n"
+          fi
+
+          # If nothing was captured, add a generic entry
+          count=$(git log "$range" --oneline --no-merges 2>/dev/null | wc -l)
+          if [ -z "$feat" ] && [ -z "$fix" ] && [ -z "$docs" ] && [ -z "$perf" ] && [ -z "$refactor" ] && [ -z "$breaking" ] && [ -z "$chore" ] && [ -z "$other" ]; then
+            section="${section}\n### Changes\n\n- Release v${version} (${count} commits)\n"
+          fi
+
+          # Add link reference
+          link="[${version}]: https://github.com/solucteam/gitlab-branch-triage/releases/tag/v${version}"
+
+          # Rebuild CHANGELOG.md
+          if [ -f CHANGELOG.md ]; then
+            header=$(awk '/^## \[/{exit} {print}' CHANGELOG.md)
+            existing=$(awk '/^## \[/{found=1} found{print}' CHANGELOG.md)
+            {
+              echo "$header"
+              echo ""
+              echo -e "$section"
+              echo "$existing"
+              echo ""
+              echo "$link"
+            } > CHANGELOG.md
+          else
+            {
+              echo "# Changelog"
+              echo ""
+              echo "All notable changes to this project will be documented in this file."
+              echo ""
+              echo "The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),"
+              echo "and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)."
+              echo ""
+              echo -e "$section"
+              echo "$link"
+            } > CHANGELOG.md
+          fi
+
+          echo "✅ CHANGELOG.md updated for v${version}"
+
+          # Save release notes for GitHub Release (just the new section)
+          echo -e "$section" > /tmp/release_notes.md
+
+      # ── 3. Commit changelog & create tag ──────────────────────────────
+
+      - name: Commit CHANGELOG.md & create tag
+        if: steps.version.outputs.changed == 'true' && steps.check_tag.outputs.exists == 'false'
+        run: |
+          tag="v${{ steps.version.outputs.current }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add CHANGELOG.md
+          if ! git diff --cached --quiet; then
+            git commit -m "docs: update CHANGELOG.md for ${tag}"
+            git push origin main
+          fi
+
+          git tag -a "$tag" -m "Release $tag"
+          git push origin "$tag"
+          echo "✅ Tag $tag created and pushed"
+
+      # ── 4. Build & publish gem ────────────────────────────────────────
+
+      - name: Set up Ruby
+        if: steps.version.outputs.changed == 'true' && steps.check_tag.outputs.exists == 'false'
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true
+
+      - name: Build gem
+        if: steps.version.outputs.changed == 'true' && steps.check_tag.outputs.exists == 'false'
+        run: gem build gitlab-branch-triage.gemspec
+
+      - name: Publish to RubyGems
+        if: steps.version.outputs.changed == 'true' && steps.check_tag.outputs.exists == 'false'
+        env:
+          GEM_HOST_API_KEY: ${{ secrets.RUBYGEMS_API_KEY }}
+        run: |
+          gem push gitlab-branch-triage-${{ steps.version.outputs.current }}.gem
+          echo "✅ Published to RubyGems"
+
+      # ── 5. GitHub Release ─────────────────────────────────────────────
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.changed == 'true' && steps.check_tag.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.current }}
+          body_path: /tmp/release_notes.md
+          files: gitlab-branch-triage-${{ steps.version.outputs.current }}.gem
+          generate_release_notes: false

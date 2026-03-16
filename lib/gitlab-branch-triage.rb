@@ -19,7 +19,6 @@ module Gitlab
 
     module Resource
       autoload :Branch,           "gitlab/branch_triage/resource/branch"
-      autoload :MergeRequest,     "gitlab/branch_triage/resource/merge_request"
     end
 
     module Conditions
@@ -32,15 +31,6 @@ module Gitlab
       autoload :AuthorCondition,  "gitlab/branch_triage/conditions/author_condition"
       autoload :ForbiddenAuthor,  "gitlab/branch_triage/conditions/author_condition"
       autoload :Evaluator,        "gitlab/branch_triage/conditions/evaluator"
-      autoload :MrEvaluator,      "gitlab/branch_triage/conditions/mr_conditions"
-      autoload :MrDateCondition,  "gitlab/branch_triage/conditions/mr_conditions"
-      autoload :MrDraft,          "gitlab/branch_triage/conditions/mr_conditions"
-      autoload :MrAssigned,       "gitlab/branch_triage/conditions/mr_conditions"
-      autoload :MrHasReviewer,    "gitlab/branch_triage/conditions/mr_conditions"
-      autoload :MrPipelineStatus, "gitlab/branch_triage/conditions/mr_conditions"
-      autoload :MrLabels,         "gitlab/branch_triage/conditions/mr_conditions"
-      autoload :MrForbiddenLabels,"gitlab/branch_triage/conditions/mr_conditions"
-      autoload :MrTargetBranch,   "gitlab/branch_triage/conditions/mr_conditions"
     end
 
     module Actions
@@ -50,11 +40,6 @@ module Gitlab
       autoload :Print,            "gitlab/branch_triage/actions/print"
       autoload :Comment,          "gitlab/branch_triage/actions/comment"
       autoload :Executor,         "gitlab/branch_triage/actions/executor"
-      autoload :CommentMr,        "gitlab/branch_triage/actions/mr_actions"
-      autoload :CloseMr,          "gitlab/branch_triage/actions/mr_actions"
-      autoload :LabelMr,          "gitlab/branch_triage/actions/mr_actions"
-      autoload :NotifyMr,         "gitlab/branch_triage/actions/mr_actions"
-      autoload :MrExecutor,       "gitlab/branch_triage/actions/mr_actions"
     end
   end
 end

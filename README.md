@@ -12,13 +12,13 @@
 
 ---
 
-**gitlab-branch-triage** automates branch and merge request cleanup on GitLab using YAML-driven policies. Notify stale branch authors, auto-delete merged branches, close abandoned MRs, detect inactive authors, and keep your repositories clean — all from a single configuration file.
+**gitlab-branch-triage** automates branch cleanup on GitLab using YAML-driven policies. Notify stale branch authors, auto-delete merged branches, detect inactive authors, and automatically close notification issues when branches are removed — all from a single configuration file.
 
 ## Features
 
 - **Policy-driven** — define triage rules in a simple YAML file
 - **Branch triage** — detect stale, merged, or abandoned branches and act on them
-- **MR triage** — warn about abandoned MRs, close stale ones, flag failing pipelines
+- **Automatic issue lifecycle** — notification issues are closed automatically when the branch is deleted
 - **Inactive author detection** — automatically handles branches from blocked/deleted users
 - **Group-wide** — triage all projects in a GitLab group (subgroups included recursively)
 - **Dry-run by default** — safe to test before executing real actions
@@ -66,7 +66,7 @@ gitlab-branch-triage --source-id my-group/my-project --no-dry-run
 
 ## Configuration
 
-Policies are defined in `.branch-triage-policies.yml`. The file has two main sections: `branches` rules and `merge_requests` rules.
+Policies are defined in `.branch-triage-policies.yml`.
 
 ### Branch Rules
 
@@ -130,72 +130,30 @@ date:
 
 | Action | Config | Description |
 |--------|--------|-------------|
-| `notify` | `{title, body, labels}` | Create an issue to notify the author |
-| `delete` | `true` | Delete the branch |
+| `notify` | `{title, body, labels}` | Create an issue to notify the author. Closed automatically when the branch is deleted. |
+| `delete` | `true` | Delete the branch and close the associated notification issue. |
 | `print` | `"template string"` | Log a message |
 | `comment` | `{issue_iid, body}` | Comment on an existing issue |
 
-### Merge Request Rules
-
-```yaml
-resource_rules:
-  merge_requests:
-    rules:
-      - name: Warn abandoned MRs (30+ days)
-        conditions:
-          date:
-            attribute: updated_at
-            condition: older_than
-            interval_type: days
-            interval: 30
-          forbidden_labels:
-            - do-not-close
-        actions:
-          label_mr:
-            - stale
-          comment_mr: |
-            @{{author_username}}, this MR has had no activity for **{{days_since_update}} days**.
-
-      - name: Close abandoned MRs (60+ days)
-        conditions:
-          date:
-            attribute: updated_at
-            condition: older_than
-            interval_type: days
-            interval: 60
-        actions:
-          close_mr: true
-```
-
-### MR Conditions
-
-| Condition | Example | Description |
-|-----------|---------|-------------|
-| `date` | `{attribute: updated_at, ...}` | Filter by `updated_at` or `created_at` |
-| `draft` | `true` / `false` | Draft/WIP status |
-| `assigned` | `true` / `false` | Has assignees |
-| `has_reviewer` | `true` / `false` | Has reviewers |
-| `pipeline_status` | `"failed"` | Pipeline state (`success`, `failed`, `running`, `pending`) |
-| `labels` | `["label1"]` | All labels must match (AND) |
-| `forbidden_labels` | `["on-hold"]` | None must match |
-| `target_branch` | `"main"` or `{matches: "regex"}` | Target branch filter |
-| `title` | `{contains: "hotfix"}` | Title pattern matching |
-
-### MR Actions
-
-| Action | Config | Description |
-|--------|--------|-------------|
-| `comment_mr` | `"template"` | Post a comment on the MR |
-| `close_mr` | `true` | Close the MR |
-| `label_mr` | `["stale"]` | Add labels |
-| `notify_mr` | `{title, body, labels}` | Create a notification issue |
-| `print` | `"template"` | Log a message |
-
 ### Template Variables
 
-**Branches:** `{{name}}`, `{{author_name}}`, `{{author_email}}`, `{{author_username}}`, `{{committed_date}}`, `{{days_inactive}}`, `{{delete_date}}`, `{{commit_title}}`, `{{short_sha}}`, `{{project_path}}`, `{{today}}`
+`{{name}}`, `{{author_name}}`, `{{author_email}}`, `{{author_username}}`, `{{committed_date}}`, `{{days_inactive}}`, `{{delete_date}}`, `{{commit_title}}`, `{{short_sha}}`, `{{project_path}}`, `{{today}}`
 
-**Merge Requests:** `{{iid}}`, `{{title}}`, `{{web_url}}`, `{{source_branch}}`, `{{target_branch}}`, `{{author_username}}`, `{{author_name}}`, `{{labels}}`, `{{state}}`, `{{draft}}`, `{{days_since_update}}`, `{{days_since_creation}}`, `{{updated_at}}`, `{{pipeline_status}}`, `{{close_date}}`, `{{project_path}}`, `{{today}}`
+## Issue Lifecycle
+
+gitlab-branch-triage manages the full lifecycle of notification issues automatically.
+
+**When `notify` runs**, an issue is created and assigned to the branch author with a deletion deadline (`{{delete_date}}`). The issue has the label `branch-cleanup`.
+
+**When the branch is deleted by a `delete` rule**, the tool searches for any open `branch-cleanup` issue whose title contains the branch name and closes it automatically.
+
+**When the author deletes the branch themselves** (before the scheduled date), the next triage run detects that the branch no longer exists and closes the orphaned issue automatically.
+
+This means issues are never left open after the branch is gone, regardless of who or what deleted it.
+
+## Inactive Author Detection
+
+When the `notify` action detects that a branch author is inactive (blocked, deactivated, or deleted from GitLab), it automatically deletes the branch and creates a cleanup issue assigned to a project maintainer. This prevents stale notifications to users who can no longer act on them.
 
 ## CLI Options
 
@@ -250,17 +208,13 @@ branch-triage:
 
 Generate the snippet with `gitlab-branch-triage --init-ci`.
 
-## Inactive Author Detection
-
-When the `notify` action detects that a branch author is inactive (blocked, deactivated, or deleted from GitLab), it automatically deletes the branch and creates a cleanup issue assigned to a project maintainer. This prevents stale notifications to users who can no longer act on them.
-
 ## Contributing
 
 Bug reports and pull requests are welcome on [GitHub](https://github.com/solucteam/gitlab-branch-triage).
 
 1. Fork it
 2. Create your feature branch (`git checkout -b feature/my-feature`)
-3. Commit your changes (`git commit -am 'Add my feature'`)
+3. Commit your changes (`git commit -am 'feat: add my feature'`)
 4. Push to the branch (`git push origin feature/my-feature`)
 5. Open a Pull Request
 

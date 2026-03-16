@@ -26,10 +26,6 @@ module Gitlab
       def branch_rules
         raw.dig("resource_rules", "branches", "rules") || []
       end
-
-      def mr_rules
-        raw.dig("resource_rules", "merge_requests", "rules") || []
-      end
     end
   end
 end

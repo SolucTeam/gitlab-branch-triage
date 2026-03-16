@@ -17,17 +17,15 @@ module Gitlab
         @dry_run       = dry_run
         @logger        = logger
         @options       = options
-        @stats         = { projects: 0, branches_matched: 0, mrs_matched: 0,
-                           skipped: 0, errors: 0 }
+        @stats         = { projects: 0, branches_matched: 0, skipped: 0, errors: 0 }
       end
 
       def run
         print_header
 
         branch_rules = policy_loader.branch_rules
-        mr_rules     = policy_loader.mr_rules
 
-        if branch_rules.empty? && mr_rules.empty?
+        if branch_rules.empty?
           logger.warn("No rules found in policies file.")
           return
         end
@@ -38,9 +36,9 @@ module Gitlab
           return
         end
 
-        projects.each { |project| run_project(project, branch_rules, mr_rules) }
+        projects.each { |project| run_project(project, branch_rules) }
 
-        print_summary(branch_rules.size, mr_rules.size)
+        print_summary(branch_rules.size)
       end
 
       private
@@ -62,7 +60,7 @@ module Gitlab
 
       # ── Per-project processing ────────────────────────────────────────────
 
-      def run_project(project, branch_rules, mr_rules)
+      def run_project(project, branch_rules)
         project_id   = project["id"] || project["path_with_namespace"]
         project_path = project["path_with_namespace"] || project_id.to_s
 
@@ -73,11 +71,41 @@ module Gitlab
 
         @stats[:projects] += 1
 
-        run_branch_rules(branch_rules, project_id, project_path) if branch_rules.any?
-        run_mr_rules(mr_rules, project_id, project_path)         if mr_rules.any?
+        close_orphaned_issues(project_id)
+        run_branch_rules(branch_rules, project_id, project_path)
       rescue => e
         logger.error("  ERROR processing #{project_path}: #{e.message}")
         @stats[:errors] += 1
+      end
+
+      # ── Orphaned issue cleanup ────────────────────────────────────────────
+      #
+      # Finds open branch-cleanup issues whose branch no longer exists
+      # (deleted manually by the author or via another process) and closes them.
+
+      def close_orphaned_issues(project_id)
+        issues = client.project_issues(project_id, labels: "branch-cleanup")
+        return if issues.empty?
+
+        existing_branches = client.branches(project_id).map { |b| b["name"] }.to_set
+
+        issues.each do |issue|
+          # Extract branch name from issue title — matches patterns like:
+          #   "🔔 Stale branch: `feature/foo`"
+          branch_name = issue["title"].to_s[/`([^`]+)`/, 1]
+          next unless branch_name
+          next if existing_branches.include?(branch_name)
+
+          if dry_run
+            logger.info("  [DRY-RUN] Would close issue ##{issue["iid"]} — branch #{branch_name.inspect} no longer exists")
+            next
+          end
+
+          client.close_issue(project_id, issue["iid"])
+          logger.info("  ✅ Closed issue ##{issue["iid"]} — branch #{branch_name.inspect} no longer exists")
+        rescue => e
+          logger.error("  ❌ Could not close issue ##{issue["iid"]}: #{e.message}")
+        end
       end
 
       # ── Branch rules ──────────────────────────────────────────────────────
@@ -143,72 +171,6 @@ module Gitlab
         end
       end
 
-      # ── MR rules ──────────────────────────────────────────────────────────
-
-      def run_mr_rules(rules, project_id, project_path)
-        logger.info("")
-        logger.info("-- Merge Requests --")
-
-        raw_mrs = client.merge_requests(project_id, state: "opened")
-        logger.info("  #{raw_mrs.size} open MR(s) found")
-
-        mrs = raw_mrs.map do |raw|
-          mr = Resource::MergeRequest.new(raw)
-          mr.project_path = project_path
-          mr
-        end
-
-        rules.each { |rule| process_mr_rule(rule, mrs, project_id, project_path) }
-      end
-
-      def process_mr_rule(rule, mrs, project_id, project_path)
-        name       = rule["name"] || "(unnamed)"
-        conditions = rule["conditions"] || {}
-        actions    = rule["actions"]    || {}
-        limits     = rule["limits"]     || {}
-
-        logger.info("")
-        logger.info("  Rule: #{name}")
-
-        matched = mrs.select do |mr|
-          Conditions::MrEvaluator.new(mr, conditions).satisfied?
-        rescue => e
-          logger.error("    ERROR evaluating MR !#{mr.iid}: #{e.message}")
-          @stats[:errors] += 1
-          false
-        end
-
-        if limits["most_recent"]
-          matched = matched.sort_by(&:updated_at).last(limits["most_recent"].to_i)
-        end
-
-        if matched.empty?
-          logger.info("    No MRs matched.")
-          return
-        end
-
-        @stats[:skipped] += mrs.size - matched.size
-
-        logger.info("    #{matched.size} matched:")
-
-        close_threshold = conditions.dig("date", "interval") || 30
-
-        matched.each do |mr|
-          mr.close_in_days = [close_threshold.to_i - mr.days_since_update, 0].max
-
-          logger.info("    MR !#{mr.iid} : #{mr.title.slice(0, 55)}")
-          logger.info("      Author  : @#{mr.author_username}")
-          logger.info("      Updated : #{mr.days_since_update}d ago | Draft: #{mr.draft?} | Labels: #{mr.labels.join(", ")}")
-
-          Actions::MrExecutor.new(
-            client: client, project_id: project_id, mr: mr,
-            actions: actions, dry_run: dry_run, logger: logger
-          ).execute!
-
-          @stats[:mrs_matched] += 1
-        end
-      end
-
       # ── Helpers ───────────────────────────────────────────────────────────
 
       def print_header
@@ -225,15 +187,13 @@ module Gitlab
         logger.info(SEPARATOR)
       end
 
-      def print_summary(branch_rule_count, mr_rule_count)
+      def print_summary(branch_rule_count)
         logger.info("")
         logger.info(LINE)
         logger.info("Summary")
         logger.info("  Projects processed  : #{@stats[:projects]}")
         logger.info("  Branch rules        : #{branch_rule_count}")
-        logger.info("  MR rules            : #{mr_rule_count}")
         logger.info("  Branches matched    : #{@stats[:branches_matched]}")
-        logger.info("  MRs matched         : #{@stats[:mrs_matched]}")
         logger.info("  Skipped             : #{@stats[:skipped]}")
         logger.info("  Errors              : #{@stats[:errors]}") if @stats[:errors] > 0
         if dry_run

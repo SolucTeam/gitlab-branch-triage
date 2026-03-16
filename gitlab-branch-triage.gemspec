@@ -8,11 +8,11 @@ Gem::Specification.new do |spec|
   spec.authors       = ["SolucTeam"]
   spec.email         = ["contact@solucteam.com"]
 
-  spec.summary       = "Automated branch and MR triage for GitLab, driven by YAML policies"
+  spec.summary       = "Automated branch triage for GitLab, driven by YAML policies"
   spec.description   = <<~DESC
     gitlab-branch-triage enables project maintainers to automatically triage
-    GitLab branches and merge requests based on policies defined in a YAML file.
-    Notify stale branch authors, auto-delete merged branches, close abandoned MRs,
+    GitLab branches based on policies defined in a YAML file.
+    Notify stale branch authors, auto-delete merged branches,
     and detect inactive authors — all configurable via simple rules.
   DESC
   spec.homepage      = "https://github.com/solucteam/gitlab-branch-triage"

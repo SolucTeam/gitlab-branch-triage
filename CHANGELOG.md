@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-03-16
+
+### Fixed
+
+-   inconsistent configurations and next v1.0.1 (622f2f2)
+
 ## [1.0.0] - 2026-03-11
 
 ### Added
@@ -24,3 +30,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI with comprehensive options for token, source, host, policies, and filters
 
 [1.0.0]: https://github.com/solucteam/gitlab-branch-triage/releases/tag/v1.0.0
+
+[1.0.1]: https://github.com/solucteam/gitlab-branch-triage/releases/tag/v1.0.1
